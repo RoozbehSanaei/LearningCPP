@@ -1,0 +1,111 @@
+# Synthetic Planar Calibration Evaluation Across Varying Intrinsic Models
+
+## Objective
+
+Quantify parameter recovery and reprojection performance of a planar calibration pipeline under controlled conditions by generating multiple synthetic datasets with known camera models, then estimating intrinsics, distortion, and per-view poses from noisy 2D measurements. The evaluation focuses on stability as the intrinsic matrix varies across runs.
+
+## Experimental Design
+
+### Fixed configuration (shared across runs)
+- Image resolution: 1280 x 720 px
+- Calibration target: planar grid, $9 × 6$ points $\Rightarrow$ \SI{54}{} points per image
+- Number of images per dataset: \SI{6}{} 
+- Measurement noise: i.i.d.\ Gaussian noise, $\sigma=0.5 px$ applied independently to each observed $(u,v)$
+- Lens distortion (held constant across runs): $k_1=-0.12$, $k_2=0.018$, $p_1=0.0012$, $p_2=-0.0007$
+
+### Varied configuration (changed per run)
+
+For each of \SI{10}{} independent datasets, a distinct intrinsic model was sampled:
+- $f_x \sim \mathrm{Uniform}(600,1200)$
+- $f_y = f_x · \mathrm{Uniform}(0.94,1.06)$
+- $c_x = W/2 + \mathrm{Uniform}(-50,+50)$
+- $c_y = H/2 + \mathrm{Uniform}(-30,+30)$
+
+## Data Generation Procedure
+
+For each dataset:
+- Sample a ground-truth intrinsic model $(f_x,f_y,c_x,c_y)$ from the distributions above.
+- Generate \SI{6}{} camera poses (one per image) with randomized rotation and translation, constrained to keep the planar target within image bounds (a fixed margin was applied).
+- Project the planar points to pixel coordinates using the sampled intrinsics, the fixed distortion model, and the sampled pose.
+- Add Gaussian pixel noise ($\sigma=0.5 px$) to all projected measurements to obtain the synthetic observations.
+
+## Calibration Pipeline
+
+For each dataset, parameter estimation proceeds as follows:
+- **Per-image homography estimation:** estimate planar homographies via normalized DLT (Direct Linear Transform) from correspondences $(X,Y)\rightarrow(u,v)$.
+- **Intrinsic initialization (planar self-calibration):** solve Zhang constraints from the set of homographies to obtain initial estimates of $f_x,f_y,c_x,c_y$ (skew fixed to zero in this implementation).
+- **Pose initialization:** recover per-image rotation and translation by decomposing each homography using the intrinsic estimate, followed by orthonormalization (projection onto $\mathrm{SO}(3)$).
+- **Nonlinear refinement (reprojection-error minimization):** jointly refine intrinsics, distortion, and poses via staged Levenberg--Marquardt:
+- Phase A: intrinsics + poses (distortion held at zero)
+- Phase B: enable $(k_1,k_2)$ + intrinsics + poses
+- Phase C: enable $(k_1,k_2,p_1,p_2)$ + intrinsics + poses
+  
+
+## Evaluation Metrics
+
+### Reprojection RMSE (pixels)
+- **Noise-floor RMSE:** RMSE obtained when projecting with ground-truth parameters onto noisy observations (lower bound under the chosen noise model).
+- **Initialization RMSE:** RMSE using the homography/Zhang initialization (distortion fixed to zero).
+- **Final RMSE:** RMSE after nonlinear refinement.
+
+### Parameter recovery error
+- Intrinsic error computed as estimate minus ground truth.
+- Reported as MAE (mean absolute error) for each intrinsic component; relative MAE for $f_x$ and $f_y$; and MAE for distortion parameters.
+
+## Results (10 datasets)
+
+### Aggregate reprojection performance (mean $\pm$ std, pixels)
+- Noise-floor RMSE: $0.7154 \pm 0.0196$
+- Initialization RMSE: $1.6070 \pm 0.4392$
+- Final RMSE: $0.7463 \pm 0.0971$
+- Final / noise-floor ratio: $1.0437 \pm 0.1402$
+
+Interpretation: the refined solution is, on average, within approximately 4.4 of the irreducible error induced by the measurement noise.
+
+### Intrinsic recovery error (estimate minus ground truth)
+- $f_x$: MAE $19.99$ px, relative MAE $0.0262$ ($\approx 2.62$)
+- $f_y$: MAE $21.22$ px, relative MAE $0.0273$ ($\approx 2.73$)
+- $c_x$: MAE $33.32$ px
+- $c_y$: MAE $14.15$ px
+
+### Distortion recovery error (estimate minus ground truth)
+- $k_1$: MAE $0.04933$
+- $k_2$: MAE $0.14808$
+- $p_1$: MAE $0.001678$
+- $p_2$: MAE $0.002887$
+
+## Per-run Summary
+
+\begin{table}[h!]
+\centering
+
+|run|f_{x,gt}|f_{y,gt}|c_{x,gt}|c_{y,gt}|RMSE_{floor}|RMSE_{final}|
+|---|---|---|---|---|---|---|
+|1|633.2|622.2|670.4|331.2|0.6967|0.6779|
+|2|738.9|763.0|596.6|365.0|0.7112|0.7127|
+|3|870.9|898.8|616.0|339.9|0.7040|0.6881|
+|4|836.2|799.0|640.4|347.4|0.7229|0.6949|
+|5|650.2|648.3|605.7|368.2|0.7142|0.6902|
+|6|736.2|739.0|615.8|364.4|0.7085|0.6773|
+|7|1117.4|1110.3|639.4|356.7|0.7285|0.7532|
+|8|1149.8|1080.9|601.6|363.6|0.7546|0.8899|
+|9|931.2|897.1|664.5|370.3|0.6847|0.9559|
+|10|746.2|761.6|652.4|347.1|0.7293|0.7230|
+
+\end{table}
+
+## Discussion
+- **Convergence to the noise floor:** the final RMSE tracks the noise floor closely on average, indicating that the reprojection objective is being minimized effectively under typical sampled intrinsics.
+- **Outlier runs:** runs 8 and 9 exhibit higher final RMSE relative to their noise floor, consistent with the sensitivity of planar calibration to pose diversity and parameter coupling (intrinsics--distortion--pose trade-offs).
+- **Principal point variability:** $c_x,c_y$ show larger absolute MAE than focal lengths, which is common when view diversity is limited and distortion competes with principal point shifts.
+
+## Limitations
+- **Planar degeneracies and coupling:** planar targets inherently provide weaker constraints than 3D calibration rigs; parameter coupling can produce multiple near-equivalent solutions under noise.
+- **Numeric Jacobian:** finite-difference Jacobians are serviceable but less stable and less efficient than analytic derivatives.
+- **Limited number of images per dataset (6):** this reduces robustness, particularly for separating distortion from intrinsics.
+
+## Recommendations
+- Increase the number of images per dataset (e.g., 15--30) with stronger tilt and roll diversity.
+- Ensure broader spatial coverage of the target across the image (near corners and edges).
+- Replace numeric Jacobians with analytic Jacobians for the projection + distortion model.
+- Add mild regularization or priors (e.g., constrain $c_x,c_y$ near the image center when appropriate).
