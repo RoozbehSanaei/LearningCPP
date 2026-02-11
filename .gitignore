@@ -1,0 +1,7 @@
+# Binary model/checkpoint artifacts
+*.pt
+*.pth
+*.ckpt
+
+# Archive artifacts
+*.zip
